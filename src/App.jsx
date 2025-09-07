@@ -29,7 +29,7 @@ function App() {
           body: JSON.stringify({
             contents: [
               {
-                parts: [{ text: value+"modify this prompt so it is understood by an image generating model" }],
+                parts: [{ text: value+"modify this prompt and make it simple,character and scene detailed so its understood and correctly interpreted when passed to flux model,only return the final prompt in one para" }],
               },
             ],
           }),
