@@ -1,12 +1,15 @@
 import { useState } from "react";
+import { generateImagesForScenes } from "./image";
 
-// ✅ Fetch API key from .env (must start with VITE_)
-const API_KEY="AIzaSyCV8vHf5I22YijDmOodKnFpLmHZSyqKd6g";
+const API_KEY = "AIzaSyCV8vHf5I22YijDmOodKnFpLmHZSyqKd6g";
 
 function App() {
   const [value, setValue] = useState("");
-  const [response, setResponse] = useState("");
+  const [story, setStory] = useState("");
+  const [scenePrompts, setScenePrompts] = useState([]);
+  const [imageResults, setImageResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingImages, setLoadingImages] = useState(false);
 
   const handleChange = (e) => setValue(e.target.value);
 
@@ -14,11 +17,13 @@ function App() {
     if (!value.trim()) return;
 
     setLoading(true);
-    setResponse("");
+    setStory("");
+    setScenePrompts([]);
+    setImageResults([]);
 
     try {
-      // ✅ Call Gemini API directly (like Postman)
-      const res = await fetch(
+      // Step 1: Generate story
+      const storyRes = await fetch(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
         {
           method: "POST",
@@ -29,38 +34,96 @@ function App() {
           body: JSON.stringify({
             contents: [
               {
-                parts: [{ text: value+"modify this prompt and make it simple,character and scene detailed so its understood and correctly interpreted when passed to flux model,only return the final prompt in one para" }],
+                parts: [{ text: `${value} Write a short simple story of 10-12 lines.` }],
               },
             ],
           }),
         }
       );
 
-      if (!res.ok) {
-        throw new Error(`HTTP error! Status: ${res.status}`);
-      }
+      const storyData = await storyRes.json();
+      const shortStory = storyData?.candidates?.[0]?.content?.parts?.[0]?.text || "No story generated";
+      setStory(shortStory);
 
-      const data = await res.json();
+      // Step 2: Split into image-ready scenes
+      const sceneRes = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": API_KEY,
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: `Take the story below and do the following:
 
-      // ✅ Extract model response safely
-      const text =
-        data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-        "⚠️ No response from Gemini";
+1. Identify all main characters. For each character, write a one-line description and define it in a variable like for example:
+   ronak = "description"
+   jheel = "description"
 
-      setResponse(text);
+2. Split the story into multiple scenes: Scene 1, Scene 2, etc.
+
+3. For each scene, write a short, clear prompt for image generation:
+   - Start with character variables instead of real names (like {ronak}, {jheel}).
+   - Describe setting (place, time, mood) in simple words.
+   - Describe actions happening and important objects.
+
+4. Output only:
+   - Character definitions first.
+   - Then each scene labeled as "Scene 1:", "Scene 2:", etc(But note try to make 3 to 4 scenes only).
+   - Make sure prompts are simple and easy for an image model to understand.
+
+Story:
+"YOUR_STORY"
+
+
+"${shortStory}"`,
+                  },
+                ],
+              },
+            ],
+          }),
+        }
+      );
+
+      const sceneData = await sceneRes.json();
+      const rawScenes = sceneData?.candidates?.[0]?.content?.parts?.[0]?.text || "No scenes generated";
+
+      // Split scenes cleanly based on "Scene" keyword
+      const sceneList = rawScenes.split(/Scene\s+\d+:/).filter((s) => s.trim() !== "");
+      const finalScenes = sceneList.map((s, i) => `Scene ${i + 1}:${s.trim()}`);
+      setScenePrompts(finalScenes);
     } catch (error) {
       console.error(error);
-      setResponse("❌ Error fetching response");
+      setStory("Error generating story or scenes.");
     } finally {
       setLoading(false);
     }
   };
 
+  // Step 3: Generate images for scenes
+  const handleGenerateImages = async () => {
+    if (scenePrompts.length === 0) return;
+
+    setLoadingImages(true);
+    setImageResults([]);
+    try {
+      const results = await generateImagesForScenes(scenePrompts);
+      setImageResults(results);
+    } catch (err) {
+      console.error("Image generation failed:", err);
+    } finally {
+      setLoadingImages(false);
+    }
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-6">
-      <h1 className="text-3xl font-bold text-gray-800 mb-6">
-        Story Board Generator
-      </h1>
+      <h1 className="text-3xl font-bold text-gray-800 mb-6">Story Board Generator</h1>
 
       <div className="flex space-x-3 w-full max-w-md">
         <input
@@ -75,13 +138,47 @@ function App() {
           disabled={loading}
           className="px-6 py-2 bg-blue-600 text-white font-medium rounded-xl shadow hover:bg-blue-700 transition disabled:opacity-50"
         >
-          {loading ? "Loading..." : "Submit"}
+          {loading ? "Loading..." : "Generate"}
         </button>
       </div>
 
-      {response && (
+      {story && (
         <div className="mt-6 p-4 bg-white rounded-xl shadow-md w-full max-w-md text-gray-800 whitespace-pre-wrap">
-          {response}
+          <h2 className="text-xl font-bold mb-2">Generated Story:</h2>
+          {story}
+        </div>
+      )}
+
+      {scenePrompts.length > 0 && (
+        <div className="mt-6 p-4 bg-white rounded-xl shadow-md w-full max-w-md text-gray-800 whitespace-pre-wrap">
+          <h2 className="text-xl font-bold mb-2">Image-Ready Scene Prompts:</h2>
+          {scenePrompts.map((scene, idx) => (
+            <div key={idx} className="mb-3">
+              <strong>{scene}</strong>
+            </div>
+          ))}
+
+          <div className="mt-4">
+            <button
+              onClick={handleGenerateImages}
+              disabled={loadingImages}
+              className="px-6 py-2 bg-green-600 text-white font-medium rounded-xl shadow hover:bg-green-700 transition disabled:opacity-50"
+            >
+              {loadingImages ? "Generating Images..." : "Visualize Scenes"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {imageResults.length > 0 && (
+        <div className="mt-6 p-4 bg-white rounded-xl shadow-md w-full max-w-md">
+          <h2 className="text-xl font-bold mb-2">Generated Images:</h2>
+          {imageResults.map((item, i) => (
+            <div key={i} className="mb-4">
+              <h3 className="font-semibold mb-1">{item.scene}</h3>
+              <img src={item.url} alt={`Scene ${i + 1}`} className="rounded-lg shadow" />
+            </div>
+          ))}
         </div>
       )}
     </div>
